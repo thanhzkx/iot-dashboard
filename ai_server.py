@@ -4,7 +4,7 @@ import requests, os
 app = Flask(__name__)
 
 OPENAI_KEY = os.getenv("OPENAI_KEY")
-OPENAI_URL = "https://chatgpt.com/share/6926c9d0-03ec-8002-b8bb-adb57c732f7c"
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 
 @app.route("/ai", methods=["POST"])
 def ai():
