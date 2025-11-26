@@ -1,22 +1,22 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8"/>
-  <title>IoT Dashboard</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<meta charset="utf-8"/>
+<title>IoT Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-  <!-- T?t cache ho�n to�n -->
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta http-equiv="Pragma" content="no-cache" />
-  <meta http-equiv="Expires" content="0" />
+<!-- Disable cache -->
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" />
 
-  <style>
-    body { font-family: Arial; margin: 20px; background: #f8f8f8; }
-    .container { max-width: 1200px; margin: auto; }
-    .chart-box { background: #fff; padding: 20px; margin: 30px 0; border-radius: 12px; 
-      box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-    canvas { max-width: 100%; }
-  </style>
+<style>
+  body { font-family: Arial; margin: 20px; background: #f8f8f8; }
+  .container { max-width: 1200px; margin: auto; }
+  .chart-box { background:#fff;padding:20px;margin:30px 0;border-radius:12px;
+               box-shadow:0 0 10px rgba(0,0,0,0.1); }
+  canvas { max-width: 100%; }
+</style>
 </head>
 
 <body>
@@ -24,7 +24,6 @@
 <div class="container">
   <h1>IoT Dashboard</h1>
 
-  <!-- Date filter -->
   <label>Select date:</label>
   <input type="date" id="datePicker" />
   <button onclick="loadAll()">Load</button>
@@ -49,142 +48,199 @@
     <canvas id="chartGas"></canvas>
   </div>
 
-  <div id="aiBox" style="background:#eef;border-left:5px solid #33f;padding:12px;margin:20px 0;">
+  <div id="aiBox" style="background:#eef;border-left:5px solid #33f;
+       padding:12px;margin:20px 0;">
     <h3>AI Analysis</h3>
     <div id="aiText" style="white-space:pre-line;">No warnings detected.</div>
   </div>
 </div>
-
 <script>
-/* ======================================================
-   LOAD JSON (ANTI-CACHE)
-====================================================== */
+/* ================================
+      CONFIG
+================================ */
+const AI_URL = "http://10.35.28.118:8000/ai";   // d?i IP t?i d�y
+
+let lastAIResult = "No warnings detected.";
+let lastAITime = "";
+
+
+/* ================================
+      LOAD JSON (ANTI-CACHE)
+================================ */
 async function loadJSON(filename){
-    const res = await fetch(filename + "?v=" + Date.now());
+  try {
+    const res = await fetch(filename + "?v=" + Date.now(), { cache: "no-store" });
+    if (!res.ok) return null;
     return await res.json();
+  } catch (e) {
+    return null;
+  }
 }
 
-/* ======================================================
-   FILTER DATA
-====================================================== */
+
+/* ================================
+      FILTERS
+================================ */
 function filterByDate(data, date){
-    if (!date) return data;
-    const start = new Date(date + " 00:00:00").getTime();
-    const end   = new Date(date + " 23:59:59").getTime();
-    return data.filter(x => x.ts >= start && x.ts <= end);
+  if (!date) return data;
+  const s = new Date(date + " 00:00:00").getTime();
+  const e = new Date(date + " 23:59:59").getTime();
+  return data.filter(x => x.ts >= s && x.ts <= e);
 }
+
 function filterBy5Min(data){
-    const arr = [];
-    let last = 0;
-    for(const p of data){
-        if(p.ts - last >= 5 * 60 * 1000){
-            arr.push(p);
-            last = p.ts;
-        }
+  if (!data) return [];
+  const arr=[]; let last=0;
+  for(const p of data){
+    if(!p || !p.ts) continue;
+    if(p.ts - last >= 5*60*1000){
+      arr.push(p);
+      last=p.ts;
     }
-    return arr;
+  }
+  return arr;
 }
 
-/* ======================================================
-   DRAW CHART (AUTO DESTROY OLD CHART)
-====================================================== */
+
+/* ================================
+      SAFE DRAW CHART
+================================ */
 function drawChart(canvasID, title, data, color){
-    const ctx = document.getElementById(canvasID).getContext("2d");
+  const ctx = document.getElementById(canvasID).getContext("2d");
 
-    if (window[canvasID] && typeof window[canvasID].destroy === "function") {
-    window[canvasID].destroy();
-}
+  if (window[canvasID] && typeof window[canvasID].destroy === "function"){
+    try { window[canvasID].destroy(); } catch(e){}
+  }
 
-
-    const labels = data.map(p => new Date(p.ts).toLocaleTimeString());
-    const values = data.map(p => p.value);
-
-    window[canvasID] = new Chart(ctx, {
-        type: "line",
-        data: {
-            labels: labels,
-            datasets: [{
-                label: title,
-                data: values,
-                borderColor: color,
-                backgroundColor: color + "33",
-                borderWidth: 2,
-                tension: 0.25,
-                pointRadius: 3,
-                pointHoverRadius: 5
-            }]
-        },
-        options: {
-            responsive: true,
-            scales: {
-                y: { 
-                    title: { display: true, text: title }
-                }
-            }
-        }
+  if (!data || data.length === 0){
+    window[canvasID] = new Chart(ctx,{
+      type:"line",
+      data:{
+        labels:["No data"],
+        datasets:[{
+          label:title,
+          data:[0],
+          borderColor:color,
+          backgroundColor:color+"33"
+        }]
+      }
     });
-}
+    return;
+  }
 
-/* ======================================================
-   AI CHECK ALERT
-====================================================== */
-function checkAlert(data){
-  let alerts = [];
-  if (data.temp >= 32) alerts.push("temp");
-  if (data.hum < 40 || data.hum > 70) alerts.push("hum");
-  if (data.gas > 10) alerts.push("gas");
-  if (data.noise > 85) alerts.push("noise");
-  return alerts;
-}
+  const labels = data.map(p => new Date(p.ts).toLocaleTimeString());
+  const values = data.map(p => p.value);
 
-/* ======================================================
-   AI SERVER REQUEST
-====================================================== */
-async function askAI(data){
-  document.getElementById("aiText").innerText = "AI analyzing...";
-
-  // ?? THAY IP T?I ��Y
-  const resp = await fetch("http://10.35.28.118:8000/ai", {
-    method: "POST",
-    headers: {"Content-Type":"application/json"},
-    body: JSON.stringify(data)
-  });
-
-  const out = await resp.json();
-  document.getElementById("aiText").innerText = out.reply;
-}
-
-/* ======================================================
-   LOAD ALL CHARTS
-====================================================== */
-async function loadAll(){
-    const date = document.getElementById("datePicker").value;
-
-    const temp  = filterBy5Min(filterByDate(await loadJSON("data_temp.json"), date));
-    const hum   = filterBy5Min(filterByDate(await loadJSON("data_hum.json"), date));
-    const noise = filterBy5Min(filterByDate(await loadJSON("data_noise.json"), date));
-    const gas   = filterBy5Min(filterByDate(await loadJSON("data_gas.json"), date));
-
-    drawChart("chartTemp",  "Temperature (Celsius)", temp,  "#FF0000");
-    drawChart("chartHum",   "Humidity (%)",          hum,   "#0066FF");
-    drawChart("chartNoise", "Noise Level (dB)",      noise, "#009900");
-    drawChart("chartGas",   "Gas (%)",               gas,   "#FF8C00");
-
-    // AI Warning Check
-    const latest = {
-        temp: temp[temp.length-1]?.value ?? 0,
-        hum: hum[hum.length-1]?.value ?? 0,
-        gas: gas[gas.length-1]?.value ?? 0,
-        noise: noise[noise.length-1]?.value ?? 0
-    };
-
-    const alerts = checkAlert(latest);
-
-    if(alerts.length > 0){
-        askAI(latest);
-    } else {
-        document.getElementById("aiText").innerText = "All values normal.";
+  window[canvasID] = new Chart(ctx,{
+    type:"line",
+    data:{
+      labels:labels,
+      datasets:[{
+        label:title,
+        data:values,
+        borderColor:color,
+        backgroundColor:color+"33",
+        borderWidth:2,
+        tension:0.25
+      }]
     }
+  });
+}
+/* ================================
+      AI CHECK THRESHOLD
+================================ */
+function checkAlert(d){
+  const out=[];
+  if(d.temp >= 32) out.push("temp");
+  if(d.hum < 40 || d.hum > 70) out.push("hum");
+  if(d.gas > 10) out.push("gas");
+  if(d.noise > 85) out.push("noise");
+  return out;
+}
+
+
+/* ================================
+      AI REQUEST (10s TIMEOUT)
+================================ */
+async function askAI(data){
+  const aiBox = document.getElementById("aiText");
+  aiBox.innerText = "AI analyzing... (max 10s)";
+
+  const controller = new AbortController();
+  const tOut = setTimeout(() => controller.abort(), 10000);
+
+  // HTTPS page block HTTP ? skip
+  if (location.protocol === "https:" && AI_URL.startsWith("http:")){
+    aiBox.innerText = 
+      lastAIResult + "\n(Time: "+ lastAITime + ")" +
+      "\n\n? AI blocked: HTTPS page cannot call HTTP server";
+    return;
+  }
+
+  try{
+    const resp = await fetch(AI_URL, {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(data),
+      signal:controller.signal
+    });
+
+    clearTimeout(tOut);
+
+    if (!resp.ok){
+      aiBox.innerText = "AI error: " + resp.status;
+      return;
+    }
+
+    const j = await resp.json();
+
+    lastAIResult = j.reply;
+    lastAITime = new Date().toLocaleString();
+
+    aiBox.innerText = lastAIResult + "\n(Time: "+ lastAITime + ")";
+
+  } catch(e){
+    clearTimeout(tOut);
+
+    lastAIResult = "AI timeout or connection error.";
+    lastAITime = new Date().toLocaleString();
+
+    aiBox.innerText = lastAIResult + "\n(Time: "+ lastAITime + ")";
+  }
+}
+
+
+/* ================================
+      LOAD ALL CHARTS
+================================ */
+async function loadAll(){
+  const date = document.getElementById("datePicker").value;
+
+  const temp  = filterBy5Min(filterByDate(await loadJSON("data_temp.json"), date));
+  const hum   = filterBy5Min(filterByDate(await loadJSON("data_hum.json"), date));
+  const noise = filterBy5Min(filterByDate(await loadJSON("data_noise.json"), date));
+  const gas   = filterBy5Min(filterByDate(await loadJSON("data_gas.json"), date));
+
+  drawChart("chartTemp","Temperature (Celsius)",temp,"#FF0000");
+  drawChart("chartHum","Humidity (%)",hum,"#0066FF");
+  drawChart("chartNoise","Noise (dB)",noise,"#009900");
+  drawChart("chartGas","Gas (%)",gas,"#FF8C00");
+
+  const latest = {
+    temp: temp[temp.length-1]?.value ?? 0,
+    hum: hum[hum.length-1]?.value ?? 0,
+    gas: gas[gas.length-1]?.value ?? 0,
+    noise: noise[noise.length-1]?.value ?? 0
+  };
+
+  const alerts = checkAlert(latest);
+
+  if(alerts.length > 0){
+    askAI(latest);
+  } else {
+    document.getElementById("aiText").innerText = 
+      lastAIResult + (lastAITime ? "\n(Time: "+ lastAITime +")" : "");
+  }
 }
 
 loadAll();
