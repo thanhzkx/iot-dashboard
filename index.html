@@ -91,7 +91,10 @@ function filterBy5Min(data){
 function drawChart(canvasID, title, data, color){
     const ctx = document.getElementById(canvasID).getContext("2d");
 
-    if (window[canvasID]) window[canvasID].destroy();
+    if (window[canvasID] && typeof window[canvasID].destroy === "function") {
+    window[canvasID].destroy();
+}
+
 
     const labels = data.map(p => new Date(p.ts).toLocaleTimeString());
     const values = data.map(p => p.value);
