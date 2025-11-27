@@ -15,7 +15,14 @@
   .container { max-width: 1200px; margin: auto; }
   .chart-box { background:#fff;padding:20px;margin:30px 0;border-radius:12px;
                box-shadow:0 0 10px rgba(0,0,0,0.1); }
-  canvas { max-width: 100%; }
+  .stats { color:#444;font-size:14px;margin-bottom:8px; }
+  #warningBox {
+    background:#ffe6e6;
+    padding:12px;
+    border-left:5px solid red;
+    margin-top:25px;
+    white-space:pre-line;
+  }
 </style>
 </head>
 
@@ -30,58 +37,49 @@
 
   <div class="chart-box">
     <h3>Temperature (Celsius)</h3>
+    <div id="tempStats" class="stats"></div>
     <canvas id="chartTemp"></canvas>
   </div>
 
   <div class="chart-box">
     <h3>Humidity (%)</h3>
+    <div id="humStats" class="stats"></div>
     <canvas id="chartHum"></canvas>
   </div>
 
   <div class="chart-box">
     <h3>Noise Level (dB)</h3>
+    <div id="noiseStats" class="stats"></div>
     <canvas id="chartNoise"></canvas>
   </div>
 
   <div class="chart-box">
     <h3>Gas Concentration (%)</h3>
+    <div id="gasStats" class="stats"></div>
     <canvas id="chartGas"></canvas>
   </div>
 
-  <div id="aiBox" style="background:#eef;border-left:5px solid #33f;
-       padding:12px;margin:20px 0;">
-    <h3>AI Analysis</h3>
-    <div id="aiText" style="white-space:pre-line;">No warnings detected.</div>
-  </div>
+  <div id="warningBox" style="display:none;"></div>
 </div>
+
 <script>
-/* ================================
-      CONFIG
-================================ */
-const AI_URL = "http://10.35.28.118:8000/ai";   // d?i IP t?i d�y
-
-let lastAIResult = "No warnings detected.";
-let lastAITime = "";
-
-
 /* ================================
       LOAD JSON (ANTI-CACHE)
 ================================ */
 async function loadJSON(filename){
   try {
-    const res = await fetch(filename + "?v=" + Date.now(), { cache: "no-store" });
+    const res = await fetch(filename + "?v=" + Date.now(), { cache:"no-store" });
     if (!res.ok) return null;
     return await res.json();
-  } catch (e) {
+  } catch(e){
     return null;
   }
 }
-
-
 /* ================================
-      FILTERS
+      FILTER DATA
 ================================ */
 function filterByDate(data, date){
+  if (!data) return [];
   if (!date) return data;
   const s = new Date(date + " 00:00:00").getTime();
   const e = new Date(date + " 23:59:59").getTime();
@@ -92,7 +90,7 @@ function filterBy5Min(data){
   if (!data) return [];
   const arr=[]; let last=0;
   for(const p of data){
-    if(!p || !p.ts) continue;
+    if(!p.ts) continue;
     if(p.ts - last >= 5*60*1000){
       arr.push(p);
       last=p.ts;
@@ -101,14 +99,29 @@ function filterBy5Min(data){
   return arr;
 }
 
+/* ================================
+      STATS (MAX/MIN)
+================================ */
+function showStats(id, data){
+  if (!data || data.length === 0){
+    document.getElementById(id).innerText = "No data available.";
+    return;
+  }
+  const values = data.map(p => p.value);
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+
+  document.getElementById(id).innerText =
+    `Max: ${max}     |     Min: ${min}`;
+}
 
 /* ================================
-      SAFE DRAW CHART
+      DRAW CHART
 ================================ */
 function drawChart(canvasID, title, data, color){
   const ctx = document.getElementById(canvasID).getContext("2d");
 
-  if (window[canvasID] && typeof window[canvasID].destroy === "function"){
+  if (window[canvasID] && window[canvasID].destroy){
     try { window[canvasID].destroy(); } catch(e){}
   }
 
@@ -117,12 +130,7 @@ function drawChart(canvasID, title, data, color){
       type:"line",
       data:{
         labels:["No data"],
-        datasets:[{
-          label:title,
-          data:[0],
-          borderColor:color,
-          backgroundColor:color+"33"
-        }]
+        datasets:[{ label:title, data:[0], borderColor:color }]
       }
     });
     return;
@@ -146,72 +154,37 @@ function drawChart(canvasID, title, data, color){
     }
   });
 }
+
 /* ================================
-      AI CHECK THRESHOLD
+      WARNING SYSTEM
 ================================ */
-function checkAlert(d){
-  const out=[];
-  if(d.temp >= 32) out.push("temp");
-  if(d.hum < 40 || d.hum > 70) out.push("hum");
-  if(d.gas > 10) out.push("gas");
-  if(d.noise > 85) out.push("noise");
-  return out;
+function getWarnings(latest){
+  let warnings = [];
+
+  if (latest.temp >= 32) warnings.push(
+    "?? Temperature is HIGH!\n? Suggestion: Turn on fans, improve ventilation."
+  );
+
+  if (latest.hum < 40) warnings.push(
+    "?? Humidity too LOW!\n? Suggestion: Use humidifier or add water source."
+  );
+
+  if (latest.hum > 70) warnings.push(
+    "?? Humidity too HIGH!\n? Suggestion: Improve ventilation, reduce moisture."
+  );
+
+  if (latest.gas > 10) warnings.push(
+    "? GAS concentration DANGEROUS!\n? ACTION: Open windows immediately and check gas source!"
+  );
+
+  if (latest.noise > 85) warnings.push(
+    "?? Noise level is DANGEROUS!\n? Suggestion: Reduce exposure, wear ear protection."
+  );
+
+  return warnings;
 }
-
-
 /* ================================
-      AI REQUEST (10s TIMEOUT)
-================================ */
-async function askAI(data){
-  const aiBox = document.getElementById("aiText");
-  aiBox.innerText = "AI analyzing... (max 10s)";
-
-  const controller = new AbortController();
-  const tOut = setTimeout(() => controller.abort(), 10000);
-
-  // HTTPS page block HTTP ? skip
-  if (location.protocol === "https:" && AI_URL.startsWith("http:")){
-    aiBox.innerText = 
-      lastAIResult + "\n(Time: "+ lastAITime + ")" +
-      "\n\n? AI blocked: HTTPS page cannot call HTTP server";
-    return;
-  }
-
-  try{
-    const resp = await fetch(AI_URL, {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify(data),
-      signal:controller.signal
-    });
-
-    clearTimeout(tOut);
-
-    if (!resp.ok){
-      aiBox.innerText = "AI error: " + resp.status;
-      return;
-    }
-
-    const j = await resp.json();
-
-    lastAIResult = j.reply;
-    lastAITime = new Date().toLocaleString();
-
-    aiBox.innerText = lastAIResult + "\n(Time: "+ lastAITime + ")";
-
-  } catch(e){
-    clearTimeout(tOut);
-
-    lastAIResult = "AI timeout or connection error.";
-    lastAITime = new Date().toLocaleString();
-
-    aiBox.innerText = lastAIResult + "\n(Time: "+ lastAITime + ")";
-  }
-}
-
-
-/* ================================
-      LOAD ALL CHARTS
+      LOAD ALL
 ================================ */
 async function loadAll(){
   const date = document.getElementById("datePicker").value;
@@ -221,25 +194,36 @@ async function loadAll(){
   const noise = filterBy5Min(filterByDate(await loadJSON("data_noise.json"), date));
   const gas   = filterBy5Min(filterByDate(await loadJSON("data_gas.json"), date));
 
+  // Show max/min
+  showStats("tempStats", temp);
+  showStats("humStats", hum);
+  showStats("noiseStats", noise);
+  showStats("gasStats", gas);
+
+  // Draw charts
   drawChart("chartTemp","Temperature (Celsius)",temp,"#FF0000");
   drawChart("chartHum","Humidity (%)",hum,"#0066FF");
   drawChart("chartNoise","Noise (dB)",noise,"#009900");
   drawChart("chartGas","Gas (%)",gas,"#FF8C00");
 
-  const latest = {
-    temp: temp[temp.length-1]?.value ?? 0,
-    hum: hum[hum.length-1]?.value ?? 0,
-    gas: gas[gas.length-1]?.value ?? 0,
-    noise: noise[noise.length-1]?.value ?? 0
-  };
+  // Warnings
+  if (temp.length && hum.length && gas.length && noise.length){
+    const latest = {
+      temp: temp[temp.length-1].value,
+      hum: hum[hum.length-1].value,
+      gas: gas[gas.length-1].value,
+      noise: noise[noise.length-1].value
+    };
 
-  const alerts = checkAlert(latest);
+    const warnings = getWarnings(latest);
 
-  if(alerts.length > 0){
-    askAI(latest);
-  } else {
-    document.getElementById("aiText").innerText = 
-      lastAIResult + (lastAITime ? "\n(Time: "+ lastAITime +")" : "");
+    if (warnings.length > 0){
+      document.getElementById("warningBox").style.display = "block";
+      document.getElementById("warningBox").innerText =
+        warnings.join("\n\n");
+    } else {
+      document.getElementById("warningBox").style.display = "none";
+    }
   }
 }
 
