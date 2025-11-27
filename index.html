@@ -5,7 +5,6 @@
 <title>IoT Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-<!-- Disable cache -->
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
@@ -48,24 +47,51 @@
   </div>
 
   <div class="chart-box">
-    <h3>Noise Level (dB)</h3>
+    <h3>Noise (dB)</h3>
     <div id="noiseStats" class="stats"></div>
     <canvas id="chartNoise"></canvas>
   </div>
 
   <div class="chart-box">
-    <h3>Gas Concentration (%)</h3>
+    <h3>Gas (%)</h3>
     <div id="gasStats" class="stats"></div>
     <canvas id="chartGas"></canvas>
   </div>
 
-  <div id="warningBox" style="display:none;"></div>
+  <div id="warningBox" style="display:block;">No warnings detected.</div>
 </div>
 
 <script>
-/* ================================
-      LOAD JSON (ANTI-CACHE)
-================================ */
+/* =========================================
+   GLOBAL WARNING LOG (KH�NG XO�)
+========================================= */
+let warningLog = {};  
+// d?ng:
+// warningLog["2025-11-27"] = [
+//   "[12:35:20] Temperature high!",
+//   "[14:02:55] Gas concentration dangerous"
+// ];
+function appendWarning(date, message){
+    if(!warningLog[date]) warningLog[date] = [];
+    warningLog[date].push(message);
+}
+
+function renderWarnings(date){
+    let box = document.getElementById("warningBox");
+
+    if(!warningLog[date] || warningLog[date].length === 0){
+        box.innerText = "No warnings detected.";
+        box.style.display = "block";
+        return;
+    }
+
+    box.style.display = "block";
+    box.innerText = warningLog[date].join("\n\n");
+}
+
+/* =========================================
+   LOAD JSON NO-CACHE
+========================================= */
 async function loadJSON(filename){
   try {
     const res = await fetch(filename + "?v=" + Date.now(), { cache:"no-store" });
@@ -75,9 +101,10 @@ async function loadJSON(filename){
     return null;
   }
 }
-/* ================================
-      FILTER DATA
-================================ */
+
+/* =========================================
+   FILTERS
+========================================= */
 function filterByDate(data, date){
   if (!data) return [];
   if (!date) return data;
@@ -99,9 +126,9 @@ function filterBy5Min(data){
   return arr;
 }
 
-/* ================================
-      STATS (MAX/MIN)
-================================ */
+/* =========================================
+   MAX / MIN
+========================================= */
 function showStats(id, data){
   if (!data || data.length === 0){
     document.getElementById(id).innerText = "No data available.";
@@ -115,9 +142,9 @@ function showStats(id, data){
     `Max: ${max}     |     Min: ${min}`;
 }
 
-/* ================================
-      DRAW CHART
-================================ */
+/* =========================================
+   DRAW CHART
+========================================= */
 function drawChart(canvasID, title, data, color){
   const ctx = document.getElementById(canvasID).getContext("2d");
 
@@ -128,15 +155,11 @@ function drawChart(canvasID, title, data, color){
   if (!data || data.length === 0){
     window[canvasID] = new Chart(ctx,{
       type:"line",
-      data:{
-        labels:["No data"],
-        datasets:[{ label:title, data:[0], borderColor:color }]
-      }
+      data:{ labels:["No data"], datasets:[{ label:title, data:[0] }] }
     });
     return;
   }
-
-  const labels = data.map(p => new Date(p.ts).toLocaleTimeString());
+ const labels = data.map(p => new Date(p.ts).toLocaleTimeString());
   const values = data.map(p => p.value);
 
   window[canvasID] = new Chart(ctx,{
@@ -155,37 +178,39 @@ function drawChart(canvasID, title, data, color){
   });
 }
 
-/* ================================
-      WARNING SYSTEM
-================================ */
-function getWarnings(latest){
-  let warnings = [];
+/* =========================================
+   WARNING CHECK
+========================================= */
+function checkThresholds(latest){
+  const t = new Date(latest.ts).toLocaleTimeString();
+  const date = document.getElementById("datePicker").value;
 
-  if (latest.temp >= 32) warnings.push(
-    "?? Temperature is HIGH!\n? Suggestion: Turn on fans, improve ventilation."
-  );
+  let w = [];
 
-  if (latest.hum < 40) warnings.push(
-    "?? Humidity too LOW!\n? Suggestion: Use humidifier or add water source."
-  );
+  if (latest.temp >= 32)
+    w.push(`[${t}] ?? Temperature HIGH (>=32�C)\n? Turn on fan, improve ventilation.`);
 
-  if (latest.hum > 70) warnings.push(
-    "?? Humidity too HIGH!\n? Suggestion: Improve ventilation, reduce moisture."
-  );
+  if (latest.hum < 40)
+    w.push(`[${t}] ?? Humidity too LOW (<40%)\n? Use humidifier or add water.`);
 
-  if (latest.gas > 10) warnings.push(
-    "? GAS concentration DANGEROUS!\n? ACTION: Open windows immediately and check gas source!"
-  );
+  if (latest.hum > 70)
+    w.push(`[${t}] ?? Humidity too HIGH (>70%)\n? Improve airflow, reduce moisture.`);
 
-  if (latest.noise > 85) warnings.push(
-    "?? Noise level is DANGEROUS!\n? Suggestion: Reduce exposure, wear ear protection."
-  );
+  if (latest.gas > 10)
+    w.push(`[${t}] ? GAS DANGER (>10%)\n? Open windows immediately and check gas source!`);
 
-  return warnings;
+  if (latest.noise > 85)
+    w.push(`[${t}] ?? Noise too HIGH (>85dB)\n? Wear ear protection or reduce exposure.`);
+
+  // luu log
+  for(const msg of w){
+    appendWarning(date, msg);
+  }
 }
-/* ================================
-      LOAD ALL
-================================ */
+
+/* =========================================
+   LOAD ALL
+========================================= */
 async function loadAll(){
   const date = document.getElementById("datePicker").value;
 
@@ -194,37 +219,32 @@ async function loadAll(){
   const noise = filterBy5Min(filterByDate(await loadJSON("data_noise.json"), date));
   const gas   = filterBy5Min(filterByDate(await loadJSON("data_gas.json"), date));
 
-  // Show max/min
   showStats("tempStats", temp);
   showStats("humStats", hum);
   showStats("noiseStats", noise);
   showStats("gasStats", gas);
 
-  // Draw charts
-  drawChart("chartTemp","Temperature (Celsius)",temp,"#FF0000");
+  drawChart("chartTemp","Temperature (�C)",temp,"#FF0000");
   drawChart("chartHum","Humidity (%)",hum,"#0066FF");
   drawChart("chartNoise","Noise (dB)",noise,"#009900");
   drawChart("chartGas","Gas (%)",gas,"#FF8C00");
 
-  // Warnings
+  // l?y b?n ghi cu?i ng�y d� d? ki?m tra c?nh b�o
   if (temp.length && hum.length && gas.length && noise.length){
     const latest = {
+      ts: temp[temp.length-1].ts,
       temp: temp[temp.length-1].value,
       hum: hum[hum.length-1].value,
       gas: gas[gas.length-1].value,
       noise: noise[noise.length-1].value
     };
 
-    const warnings = getWarnings(latest);
-
-    if (warnings.length > 0){
-      document.getElementById("warningBox").style.display = "block";
-      document.getElementById("warningBox").innerText =
-        warnings.join("\n\n");
-    } else {
-      document.getElementById("warningBox").style.display = "none";
-    }
+    // t?o c?nh b�o
+    checkThresholds(latest);
   }
+
+  // render c?nh b�o cho ng�y d�
+  renderWarnings(date);
 }
 
 loadAll();
