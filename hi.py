@@ -21,8 +21,40 @@ import os
 import subprocess
 import threading
 
+import asyncio
+import paho.mqtt.client as mqtt
+
+MQTT_BROKER = "192.168.1.10"      # d?a ch? ESP32 ho?c broker ri�ng
+MQTT_PORT   = 1883
+MQTT_TOPIC  = "esp32/sensor"
 GIT_REPO_PATH = "/home/pi/iot-dashboard"   # du?ng d?n repo c?a b?n
 PUSH_INTERVAL = 60  # push m?i 60 gi�y
+ESP32_NAME = "ESP32_NODE1"
+MQTT_BROKER = "192.168.1.10"      # d?a ch? ESP32 ho?c broker ri�ng
+MQTT_PORT   = 1883
+MQTT_TOPIC  = "esp32/sensor"
+
+def mqtt_on_message(client, userdata, msg):
+    try:
+        text = msg.payload.decode()
+        payload = json.loads(text)
+        print("[MQTT] Data:", payload)
+
+        ts = int(time.time() * 1000)
+
+        save_point("mqtt_temp.json", ts, payload["temp"])
+        save_point("mqtt_hum.json", ts, payload["hum"])
+        save_point("mqtt_gas.json", ts, payload["gas"])
+        save_point("mqtt_noise.json", ts, payload["noise"])
+
+        schedule_push_if_due()
+
+    except Exception as e:
+        print("[MQTT] JSON error:", e)
+
+
+
+        
 
 _last_push = 0
 _pending_changes = False
@@ -50,7 +82,19 @@ def schedule_push_if_due():
     if time.time() - _last_push < PUSH_INTERVAL:
         return
     threading.Thread(target=_git_push, daemon=True).start()
+def start_mqtt():
+    client = mqtt.Client()
+    client.on_message = mqtt_on_message
 
+    try:
+        client.connect(MQTT_BROKER, MQTT_PORT, 60)
+        print("[MQTT] Connected to broker")
+        client.subscribe(MQTT_TOPIC)
+        client.loop_start()
+    except Exception as e:
+        print("[MQTT] Connect failed:", e)
+
+    return client
 def save_point(filename, ts, value):
     global _pending_changes
     path = os.path.join(GIT_REPO_PATH, filename)
@@ -61,7 +105,7 @@ def save_point(filename, ts, value):
         else:
             arr = []
     except:
-        arr = []
+        arr = [] 
 
     arr.append({"ts": ts, "value": value})
 
@@ -77,9 +121,7 @@ LCD_ADDR = 0x27
 ADS_ADDR = 0x48
 DHT_PIN = 17
 SLEEP_INTERVAL = 5.0
-# C?u h�nh ThingsBoard � thay b?ng th�ng tin thi?t b? c?a b?n
-THINGSBOARD_HOST = "mqtt.thingsboard.cloud"   # ho?c d?a ch? ThingsBoard server c?a b?n
-ACCESS_TOKEN = "tCRnF8Y71NydhzpiAhHX" # <- d?i th�nh device access token c?a b?n
+
 
 # ----------------------------
 # ADS1115 minimal driver (no libs)
@@ -125,8 +167,7 @@ class ADS1115:
             self.bus.write_i2c_block_data(self.addr, self.REG_CONFIG, [cfg_hi, cfg_lo])
         except Exception as e:
             raise IOError("I2C write to ADS1115 failed: " + str(e))
-
-        # wait conversion (depends on data_rate); 0.01s is safe for 128SPS
+         # wait conversion (depends on data_rate); 0.01s is safe for 128SPS
         time.sleep(0.01)
 
         # read conversion register (2 bytes)
@@ -222,7 +263,6 @@ class LCD1602_RP:
         if not self.enabled: return
         self.command(0x01)
         time.sleep(0.002)
-
     def write_line(self, text, line=1):
         if not self.enabled:
             # fallback to console printing
@@ -328,25 +368,30 @@ def mic_voltage_to_db(v, offset=55.0):
 # ----------------------------
 def main():
     print("Starting main. LCD@0x{:02x}, ADS1115@0x{:02x}".format(LCD_ADDR, ADS_ADDR))
+
+    # Start MQTT client
+    mqtt_client = start_mqtt()
+
+    # Init LCD + ADS
     lcd = None
     ads = None
     try:
         lcd = LCD1602_RP(addr=LCD_ADDR, bus=I2C_BUS)
     except Exception as e:
         print("LCD init error:", e)
+
     try:
         ads = ADS1115(bus=I2C_BUS, addr=ADS_ADDR)
     except Exception as e:
         print("ADS1115 init error:", e)
         ads = None
-        
-
 
     last_temp, last_hum = 0.0, 0.0
 
     try:
         while True:
-            # 1) �?c ADS1115 tru?c
+
+            # 1) �?c ADS1115
             gas_percent = 0.0
             mic_db = 0.0
 
@@ -362,13 +407,9 @@ def main():
 
                 except Exception as e:
                     print("ADS read error:", e)
-                    gas_percent = 0.0
-                    mic_db = 0.0
 
-            # --- NGH? 80ms tru?c khi d?c DHT11 ---
+            # 2) �?c DHT11
             time.sleep(0.08)
-
-            # 2) �?c DHT11 sau d? tr�nh xung d?t
             try:
                 temp, hum = read_dht11_stable(DHT_PIN)
             except:
@@ -392,7 +433,7 @@ def main():
                     lcd.write_line(line1, 1)
                     lcd.write_line(line2, 2)
                 except:
-                    print("LCD error � fallback")
+                    print("LCD error ? fallback")
                     print(line1)
                     print(line2)
             else:
@@ -400,10 +441,9 @@ def main():
                 print(line2)
 
             print(time.strftime("%Y-%m-%d %H:%M:%S"), "|", line1, "|", line2)
-            
-            
-            ts = int(time.time() * 1000)
 
+            # 4) Luu d? li?u local
+            ts = int(time.time() * 1000)
             save_point("data_temp.json", ts, float(temp))
             save_point("data_hum.json", ts, float(hum))
             save_point("data_noise.json", ts, float(mic_db))
@@ -411,28 +451,22 @@ def main():
 
             schedule_push_if_due()
 
-            
-
-
-            # 4) Ch? d?n chu k? d?c ti?p theo
+            # 5) Delay chu k?
             time.sleep(SLEEP_INTERVAL)
-
-                    
 
     except KeyboardInterrupt:
         print("Stopping (KeyboardInterrupt)...")
+
     finally:
         try:
             GPIO.cleanup()
-        except Exception:
+        except:
             pass
+
         try:
-            client.loop_stop()
-            client.disconnect()
-        except Exception:
+            mqtt_client.loop_stop()
+            mqtt_client.disconnect()
+        except:
             pass
-
-
-
 if __name__ == "__main__":
-        main()
+    main()
