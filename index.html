@@ -3,24 +3,47 @@
 <head>
 <meta charset="utf-8"/>
 <title>IoT Dashboard</title>
+
+<!-- ChartJS -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
+<!-- T?t cache d? lu�n load JSON m?i -->
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
 
 <style>
-  body { font-family: Arial; margin: 20px; background: #f8f8f8; }
-  .container { max-width: 1200px; margin: auto; }
-  .chart-box { background:#fff;padding:20px;margin:30px 0;border-radius:12px;
-               box-shadow:0 0 10px rgba(0,0,0,0.1); }
-  .stats { color:#444;font-size:14px;margin-bottom:8px; }
+  body {
+    font-family: Arial;
+    margin: 20px;
+    background-color: #f8f8f8;
+  }
+
+  .container {
+    max-width: 1200px;
+    margin: auto;
+  }
+
+  .chart-box {
+    background-color: #ffffff;
+    padding: 20px;
+    margin-top: 30px;
+    border-radius: 12px;
+    box-shadow: 0px 0px 12px rgba(0,0,0,0.15);
+  }
+
+  .stats-box {
+    color: #333333;
+    font-size: 14px;
+    margin-bottom: 8px;
+  }
+
   #warningBox {
-    background:#ffe6e6;
-    padding:12px;
-    border-left:5px solid red;
-    margin-top:25px;
-    white-space:pre-line;
+    background-color: #ffe6e6;
+    padding: 12px;
+    border-left: 5px solid red;
+    margin-top: 25px;
+    white-space: pre-line;
   }
 </style>
 </head>
@@ -30,224 +53,216 @@
 <div class="container">
   <h1>IoT Dashboard</h1>
 
+  <!-- B? ch?n ng�y -->
   <label>Select date:</label>
-  <input type="date" id="datePicker" />
-  <button onclick="loadAll()">Load</button>
+  <input type="date" id="datePicker"/>
 
+  <br><br>
+
+  <!-- B? ch?n ngu?n d? li?u: Raspberry Pi ho?c ESP32 -->
+  <label>Select data source:</label>
+  <select id="sourcePicker">
+    <option value="raspberry">Raspberry Pi</option>
+    <option value="esp32">ESP32</option>
+  </select>
+
+  <br><br>
+
+  <button onclick="loadAllData()">Load Data</button>
+
+  <!-- Temperature -->
   <div class="chart-box">
-    <h3>Temperature (Celsius)</h3>
-    <div id="tempStats" class="stats"></div>
-    <canvas id="chartTemp"></canvas>
+    <h3>Temperature (�C)</h3>
+    <div id="temperatureStats" class="stats-box"></div>
+    <canvas id="temperatureChart"></canvas>
   </div>
 
+  <!-- Humidity -->
   <div class="chart-box">
     <h3>Humidity (%)</h3>
-    <div id="humStats" class="stats"></div>
-    <canvas id="chartHum"></canvas>
+    <div id="humidityStats" class="stats-box"></div>
+    <canvas id="humidityChart"></canvas>
   </div>
 
+  <!-- Noise -->
   <div class="chart-box">
     <h3>Noise (dB)</h3>
-    <div id="noiseStats" class="stats"></div>
-    <canvas id="chartNoise"></canvas>
+    <div id="noiseStats" class="stats-box"></div>
+    <canvas id="noiseChart"></canvas>
   </div>
 
+  <!-- Gas -->
   <div class="chart-box">
     <h3>Gas (%)</h3>
-    <div id="gasStats" class="stats"></div>
-    <canvas id="chartGas"></canvas>
+    <div id="gasStats" class="stats-box"></div>
+    <canvas id="gasChart"></canvas>
   </div>
 
-  <div id="warningBox" style="display:block;">No warnings detected.</div>
+  <div id="warningBox">No warnings detected.</div>
 </div>
 
 <script>
-/* =========================================
-   GLOBAL WARNING LOG (KH�NG XO�)
-========================================= */
-let warningLog = {};  
-// d?ng:
-// warningLog["2025-11-27"] = [
-//   "[12:35:20] Temperature high!",
-//   "[14:02:55] Gas concentration dangerous"
-// ];
-function appendWarning(date, message){
-    if(!warningLog[date]) warningLog[date] = [];
-    warningLog[date].push(message);
+/* --------------------------------------------------------------------------
+   1. H�M T?I JSON KH�NG D�NG CACHE
+-------------------------------------------------------------------------- */
+async function fetchJSON(filename) {
+    try {
+        const response = await fetch(
+            filename + "?v=" + Date.now(),
+            { cache: "no-store" }
+        );
+        if (!response.ok) {
+            return null;
+        }
+        return await response.json();
+    } catch (error) {
+        return null;
+    }
 }
 
-function renderWarnings(date){
-    let box = document.getElementById("warningBox");
+/* --------------------------------------------------------------------------
+   2. L?C D? LI?U THEO NG�Y
+-------------------------------------------------------------------------- */
+function filterDataByDate(array, selectedDate) {
+    if (!array || array.length === 0) {
+        return [];
+    }
+    if (!selectedDate) {
+        return array;
+    }
 
-    if(!warningLog[date] || warningLog[date].length === 0){
-        box.innerText = "No warnings detected.";
-        box.style.display = "block";
+    const startTime = new Date(selectedDate + " 00:00:00").getTime();
+    const endTime   = new Date(selectedDate + " 23:59:59").getTime();
+
+    return array.filter(
+        point => point.ts >= startTime && point.ts <= endTime
+    );
+}
+
+/* --------------------------------------------------------------------------
+   3. GI?M D? LI?U M?I 5 PH�T / 1 M?U
+-------------------------------------------------------------------------- */
+function downSampleFiveMinutes(array) {
+    if (!array) return [];
+
+    const result = [];
+    let lastTimestamp = 0;
+
+    for (let point of array) {
+        if (point.ts - lastTimestamp >= 5 * 60 * 1000) {
+            result.push(point);
+            lastTimestamp = point.ts;
+        }
+    }
+    return result;
+}
+
+/* --------------------------------------------------------------------------
+   4. T�NH TO�N MAX / MIN
+-------------------------------------------------------------------------- */
+function showStatistics(outputId, dataset) {
+    const box = document.getElementById(outputId);
+
+    if (!dataset || dataset.length === 0) {
+        box.innerText = "No data available.";
         return;
     }
 
-    box.style.display = "block";
-    box.innerText = warningLog[date].join("\n\n");
+    const values = dataset.map(p => p.value);
+    const maximum = Math.max(...values);
+    const minimum = Math.min(...values);
+
+    box.innerText = "Max: " + maximum + "   |   Min: " + minimum;
 }
 
-/* =========================================
-   LOAD JSON NO-CACHE
-========================================= */
-async function loadJSON(filename){
-  try {
-    const res = await fetch(filename + "?v=" + Date.now(), { cache:"no-store" });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch(e){
-    return null;
-  }
-}
+/* --------------------------------------------------------------------------
+   5. V? BI?U �?
+-------------------------------------------------------------------------- */
+function drawLineChart(canvasId, chartLabel, dataset, lineColor) {
+    const canvas = document.getElementById(canvasId).getContext("2d");
 
-/* =========================================
-   FILTERS
-========================================= */
-function filterByDate(data, date){
-  if (!data) return [];
-  if (!date) return data;
-  const s = new Date(date + " 00:00:00").getTime();
-  const e = new Date(date + " 23:59:59").getTime();
-  return data.filter(x => x.ts >= s && x.ts <= e);
-}
-
-function filterBy5Min(data){
-  if (!data) return [];
-  const arr=[]; let last=0;
-  for(const p of data){
-    if(!p.ts) continue;
-    if(p.ts - last >= 5*60*1000){
-      arr.push(p);
-      last=p.ts;
+    if (window[canvasId] && window[canvasId].destroy) {
+        window[canvasId].destroy();
     }
-  }
-  return arr;
-}
 
-/* =========================================
-   MAX / MIN
-========================================= */
-function showStats(id, data){
-  if (!data || data.length === 0){
-    document.getElementById(id).innerText = "No data available.";
-    return;
-  }
-  const values = data.map(p => p.value);
-  const max = Math.max(...values);
-  const min = Math.min(...values);
+    if (!dataset || dataset.length === 0) {
+        window[canvasId] = new Chart(canvas, {
+            type: "line",
+            data: {
+                labels: ["No Data"],
+                datasets: [{ label: chartLabel, data: [0] }]
+            }
+        });
+        return;
+    }
+    const labels = dataset.map(p =>
+        new Date(p.ts).toLocaleTimeString()
+    );
 
-  document.getElementById(id).innerText =
-    `Max: ${max}     |     Min: ${min}`;
-}
+    const values = dataset.map(p => p.value);
 
-/* =========================================
-   DRAW CHART
-========================================= */
-function drawChart(canvasID, title, data, color){
-  const ctx = document.getElementById(canvasID).getContext("2d");
-
-  if (window[canvasID] && window[canvasID].destroy){
-    try { window[canvasID].destroy(); } catch(e){}
-  }
-
-  if (!data || data.length === 0){
-    window[canvasID] = new Chart(ctx,{
-      type:"line",
-      data:{ labels:["No data"], datasets:[{ label:title, data:[0] }] }
+    window[canvasId] = new Chart(canvas, {
+        type: "line",
+        data: {
+            labels: labels,
+            datasets: [{
+                label: chartLabel,
+                data: values,
+                borderColor: lineColor,
+                backgroundColor: lineColor + "33",
+                borderWidth: 2,
+                tension: 0.25
+            }]
+        }
     });
-    return;
-  }
- const labels = data.map(p => new Date(p.ts).toLocaleTimeString());
-  const values = data.map(p => p.value);
+}
 
-  window[canvasID] = new Chart(ctx,{
-    type:"line",
-    data:{
-      labels:labels,
-      datasets:[{
-        label:title,
-        data:values,
-        borderColor:color,
-        backgroundColor:color+"33",
-        borderWidth:2,
-        tension:0.25
-      }]
+/* --------------------------------------------------------------------------
+   6. H�M LOAD T?T C? D? LI?U
+-------------------------------------------------------------------------- */
+async function loadAllData() {
+    const selectedDate   = document.getElementById("datePicker").value;
+    const selectedSource = document.getElementById("sourcePicker").value;
+
+    let prefix = "";
+
+    if (selectedSource === "raspberry") {
+        prefix = "data_";   // Raspberry Pi
+    } else {
+        prefix = "mqtt_";   // ESP32
     }
-  });
+
+    const temperatureData = downSampleFiveMinutes(
+        filterDataByDate(await fetchJSON(prefix + "temp.json"), selectedDate)
+    );
+
+    const humidityData = downSampleFiveMinutes(
+        filterDataByDate(await fetchJSON(prefix + "hum.json"), selectedDate)
+    );
+
+    const noiseData = downSampleFiveMinutes(
+        filterDataByDate(await fetchJSON(prefix + "noise.json"), selectedDate)
+    );
+
+    const gasData = downSampleFiveMinutes(
+        filterDataByDate(await fetchJSON(prefix + "gas.json"), selectedDate)
+    );
+
+    showStatistics("temperatureStats", temperatureData);
+    showStatistics("humidityStats", humidityData);
+    showStatistics("noiseStats", noiseData);
+    showStatistics("gasStats", gasData);
+
+    drawLineChart("temperatureChart", "Temperature (�C)", temperatureData, "#FF0000");
+    drawLineChart("humidityChart",    "Humidity (%)",    humidityData,    "#0066FF");
+    drawLineChart("noiseChart",       "Noise (dB)",       noiseData,       "#009900");
+    drawLineChart("gasChart",         "Gas (%)",          gasData,         "#FF8800");
+
+    document.getElementById("warningBox").innerText = "No warnings detected.";
 }
 
-/* =========================================
-   WARNING CHECK
-========================================= */
-function checkThresholds(latest){
-  const t = new Date(latest.ts).toLocaleTimeString();
-  const date = document.getElementById("datePicker").value;
-
-  let w = [];
-
-  if (latest.temp >= 32)
-    w.push(`[${t}] ?? Temperature HIGH (>=32�C)\n? Turn on fan, improve ventilation.`);
-
-  if (latest.hum < 40)
-    w.push(`[${t}] ?? Humidity too LOW (<40%)\n? Use humidifier or add water.`);
-
-  if (latest.hum > 70)
-    w.push(`[${t}] ?? Humidity too HIGH (>70%)\n? Improve airflow, reduce moisture.`);
-
-  if (latest.gas > 10)
-    w.push(`[${t}] ? GAS DANGER (>10%)\n? Open windows immediately and check gas source!`);
-
-  if (latest.noise > 85)
-    w.push(`[${t}] ?? Noise too HIGH (>85dB)\n? Wear ear protection or reduce exposure.`);
-
-  // luu log
-  for(const msg of w){
-    appendWarning(date, msg);
-  }
-}
-
-/* =========================================
-   LOAD ALL
-========================================= */
-async function loadAll(){
-  const date = document.getElementById("datePicker").value;
-
-  const temp  = filterBy5Min(filterByDate(await loadJSON("data_temp.json"), date));
-  const hum   = filterBy5Min(filterByDate(await loadJSON("data_hum.json"), date));
-  const noise = filterBy5Min(filterByDate(await loadJSON("data_noise.json"), date));
-  const gas   = filterBy5Min(filterByDate(await loadJSON("data_gas.json"), date));
-
-  showStats("tempStats", temp);
-  showStats("humStats", hum);
-  showStats("noiseStats", noise);
-  showStats("gasStats", gas);
-
-  drawChart("chartTemp","Temperature (�C)",temp,"#FF0000");
-  drawChart("chartHum","Humidity (%)",hum,"#0066FF");
-  drawChart("chartNoise","Noise (dB)",noise,"#009900");
-  drawChart("chartGas","Gas (%)",gas,"#FF8C00");
-
-  // l?y b?n ghi cu?i ng�y d� d? ki?m tra c?nh b�o
-  if (temp.length && hum.length && gas.length && noise.length){
-    const latest = {
-      ts: temp[temp.length-1].ts,
-      temp: temp[temp.length-1].value,
-      hum: hum[hum.length-1].value,
-      gas: gas[gas.length-1].value,
-      noise: noise[noise.length-1].value
-    };
-
-    // t?o c?nh b�o
-    checkThresholds(latest);
-  }
-
-  // render c?nh b�o cho ng�y d�
-  renderWarnings(date);
-}
-
-loadAll();
+/* Load khi m? trang */
+loadAllData();
 </script>
 
 </body>
