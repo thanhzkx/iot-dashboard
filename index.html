@@ -4,253 +4,265 @@
 <meta charset="utf-8"/>
 <title>IoT Dashboard</title>
 
+<!-- ChartJS -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
+<!-- T?t cache d? lu�n load JSON m?i -->
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
 
 <style>
-  body { font-family: Arial; margin: 20px; background-color: #f8f8f8; }
-  .container { max-width: 1200px; margin: auto; }
-  .chart-box {
-    background: #fff; padding: 20px; margin-top: 30px;
-    border-radius: 12px; box-shadow: 0 0 10px rgba(0,0,0,0.15);
+  body {
+    font-family: Arial;
+    margin: 20px;
+    background-color: #f8f8f8;
   }
-  .stats-box { font-size: 14px; margin-bottom: 8px; color:#444; }
+
+  .container {
+    max-width: 1200px;
+    margin: auto;
+  }
+
+  .chart-box {
+    background-color: #ffffff;
+    padding: 20px;
+    margin-top: 30px;
+    border-radius: 12px;
+    box-shadow: 0px 0px 12px rgba(0,0,0,0.15);
+  }
+
+  .stats-box {
+    color: #333333;
+    font-size: 14px;
+    margin-bottom: 8px;
+  }
+
   #warningBox {
-    background:#ffe6e6; padding:12px; border-left:5px solid red;
-    margin-top:25px; white-space:pre-line;
+    background-color: #ffe6e6;
+    padding: 12px;
+    border-left: 5px solid red;
+    margin-top: 25px;
+    white-space: pre-line;
   }
 </style>
 </head>
 
 <body>
+
 <div class="container">
+  <h1>IoT Dashboard</h1>
 
-<h1>IoT Dashboard</h1>
+  <!-- B? ch?n ng�y -->
+  <label>Select date:</label>
+  <input type="date" id="datePicker"/>
 
-<label>Select date:</label>
-<input type="date" id="datePicker">
+  <br><br>
 
-<br><br>
+  <!-- B? ch?n ngu?n d? li?u: Raspberry Pi ho?c ESP32 -->
+  <label>Select data source:</label>
+  <select id="sourcePicker">
+    <option value="raspberry">Raspberry Pi</option>
+    <option value="esp32">ESP32</option>
+  </select>
 
-<label>Select data source:</label>
-<select id="sourcePicker">
-  <option value="raspberry">Raspberry Pi</option>
-  <option value="esp32">ESP32</option>
-</select>
+  <br><br>
 
-<br><br>
+  <button onclick="loadAllData()">Load Data</button>
 
-<button onclick="loadAll()">Load Data</button>
+  <!-- Temperature -->
+  <div class="chart-box">
+    <h3>Temperature (�C)</h3>
+    <div id="temperatureStats" class="stats-box"></div>
+    <canvas id="temperatureChart"></canvas>
+  </div>
 
-<!-- TEMPERATURE -->
-<div class="chart-box">
-  <h3>Temperature (�C)</h3>
-  <div id="tempStats" class="stats-box"></div>
-  <canvas id="chartTemp"></canvas>
+  <!-- Humidity -->
+  <div class="chart-box">
+    <h3>Humidity (%)</h3>
+    <div id="humidityStats" class="stats-box"></div>
+    <canvas id="humidityChart"></canvas>
+  </div>
+
+  <!-- Noise -->
+  <div class="chart-box">
+    <h3>Noise (dB)</h3>
+    <div id="noiseStats" class="stats-box"></div>
+    <canvas id="noiseChart"></canvas>
+  </div>
+
+  <!-- Gas -->
+  <div class="chart-box">
+    <h3>Gas (%)</h3>
+    <div id="gasStats" class="stats-box"></div>
+    <canvas id="gasChart"></canvas>
+  </div>
+
+  <div id="warningBox">No warnings detected.</div>
 </div>
-
-<!-- HUMIDITY -->
-<div class="chart-box">
-  <h3>Humidity (%)</h3>
-  <div id="humStats" class="stats-box"></div>
-  <canvas id="chartHum"></canvas>
-</div>
-
-<!-- NOISE -->
-<div class="chart-box">
-  <h3>Noise (dB)</h3>
-  <div id="noiseStats" class="stats-box"></div>
-  <canvas id="chartNoise"></canvas>
-</div>
-
-<!-- GAS -->
-<div class="chart-box">
-  <h3>Gas (%)</h3>
-  <div id="gasStats" class="stats-box"></div>
-  <canvas id="chartGas"></canvas>
-</div>
-
-<h3>Warning Log</h3>
-<div id="warningBox">No warnings detected.</div>
-
-</div> <!-- container -->
-
 
 <script>
-/* ====================================================================
-   LOCAL WARNING LOG (LUU VINH VI?N TRONG TR�NH DUY?T)
-==================================================================== */
-function getLog(date, source){
-  let key = "log_" + source + "_" + date;
-  return JSON.parse(localStorage.getItem(key) || "[]");
-}
-
-function saveLog(date, source, arr){
-  let key = "log_" + source + "_" + date;
-  localStorage.setItem(key, JSON.stringify(arr));
-}
-
-function appendWarning(date, source, text){
-  let log = getLog(date, source);
-  log.push(text);
-  saveLog(date, source, log);
-}
-
-function showWarningLog(date, source){
-  let log = getLog(date, source);
-  let box = document.getElementById("warningBox");
-  if (log.length === 0){
-    box.innerText = "No warnings detected.";
-  } else {
-    box.innerText = log.join("\n\n");
-  }
-}
-/* ====================================================================
-   FETCH JSON (NO CACHE)
-==================================================================== */
-async function loadJSON(file){
-  try{
-    const res = await fetch(file + "?v=" + Date.now(), {cache:"no-store"});
-    if (!res.ok) return null;
-    return await res.json();
-  }catch(e){ return null; }
-}
-
-/* ====================================================================
-   FILTERS
-==================================================================== */
-function filterDate(arr, date){
-  if (!arr) return [];
-  if (!date) return arr;
-
-  let s = new Date(date + " 00:00:00").getTime();
-  let e = new Date(date + " 23:59:59").getTime();
-
-  return arr.filter(x => x.ts >= s && x.ts <= e);
-}
-
-function filter5min(arr){
-  if (!arr) return [];
-  let out=[], last=0;
-  for (let p of arr){
-    if (p.ts - last >= 300000){
-      out.push(p);
-      last = p.ts;
+/* --------------------------------------------------------------------------
+   1. H�M T?I JSON KH�NG D�NG CACHE
+-------------------------------------------------------------------------- */
+async function fetchJSON(filename) {
+    try {
+        const response = await fetch(
+            filename + "?v=" + Date.now(),
+            { cache: "no-store" }
+        );
+        if (!response.ok) {
+            return null;
+        }
+        return await response.json();
+    } catch (error) {
+        return null;
     }
-  }
-  return out;
 }
 
-/* ====================================================================
-   CHART + STATS
-==================================================================== */
-function showStats(id, data){
-  let box = document.getElementById(id);
-  if (!data || data.length === 0){
-    box.innerText = "No data";
-    return;
-  }
-  let vals = data.map(x=>x.value);
-  box.innerText = "Max: "+Math.max(...vals)+"  |  Min: "+Math.min(...vals);
+/* --------------------------------------------------------------------------
+   2. L?C D? LI?U THEO NG�Y
+-------------------------------------------------------------------------- */
+function filterDataByDate(array, selectedDate) {
+    if (!array || array.length === 0) {
+        return [];
+    }
+    if (!selectedDate) {
+        return array;
+    }
+
+    const startTime = new Date(selectedDate + " 00:00:00").getTime();
+    const endTime   = new Date(selectedDate + " 23:59:59").getTime();
+
+    return array.filter(
+        point => point.ts >= startTime && point.ts <= endTime
+    );
 }
 
-function drawChart(canvasID, label, data, color){
-  let ctx = document.getElementById(canvasID).getContext("2d");
+/* --------------------------------------------------------------------------
+   3. GI?M D? LI?U M?I 5 PH�T / 1 M?U
+-------------------------------------------------------------------------- */
+function downSampleFiveMinutes(array) {
+    if (!array) return [];
 
-  if (window[canvasID]) window[canvasID].destroy();
+    const result = [];
+    let lastTimestamp = 0;
 
-  if (!data.length){
-    window[canvasID] = new Chart(ctx, {
-      type:"line",
-      data:{ labels:["No data"], datasets:[{label, data:[0]}] }
+    for (let point of array) {
+        if (point.ts - lastTimestamp >= 5 * 60 * 1000) {
+            result.push(point);
+            lastTimestamp = point.ts;
+        }
+    }
+    return result;
+}
+
+/* --------------------------------------------------------------------------
+   4. T�NH TO�N MAX / MIN
+-------------------------------------------------------------------------- */
+function showStatistics(outputId, dataset) {
+    const box = document.getElementById(outputId);
+
+    if (!dataset || dataset.length === 0) {
+        box.innerText = "No data available.";
+        return;
+    }
+
+    const values = dataset.map(p => p.value);
+    const maximum = Math.max(...values);
+    const minimum = Math.min(...values);
+
+    box.innerText = "Max: " + maximum + "   |   Min: " + minimum;
+}
+
+/* --------------------------------------------------------------------------
+   5. V? BI?U �?
+-------------------------------------------------------------------------- */
+function drawLineChart(canvasId, chartLabel, dataset, lineColor) {
+    const canvas = document.getElementById(canvasId).getContext("2d");
+
+    if (window[canvasId] && window[canvasId].destroy) {
+        window[canvasId].destroy();
+    }
+
+    if (!dataset || dataset.length === 0) {
+        window[canvasId] = new Chart(canvas, {
+            type: "line",
+            data: {
+                labels: ["No Data"],
+                datasets: [{ label: chartLabel, data: [0] }]
+            }
+        });
+        return;
+    }
+
+    const labels = dataset.map(p =>
+        new Date(p.ts).toLocaleTimeString()
+    );
+
+    const values = dataset.map(p => p.value);
+    window[canvasId] = new Chart(canvas, {
+        type: "line",
+        data: {
+            labels: labels,
+            datasets: [{
+                label: chartLabel,
+                data: values,
+                borderColor: lineColor,
+                backgroundColor: lineColor + "33",
+                borderWidth: 2,
+                tension: 0.25
+            }]
+        }
     });
-    return;
-  }
-    window[canvasID] = new Chart(ctx, {
-    type:"line",
-    data:{
-      labels: data.map(x=>new Date(x.ts).toLocaleTimeString()),
-      datasets:[{
-        label,
-        data: data.map(x=>x.value),
-        borderColor: color,
-        backgroundColor: color+"33",
-        borderWidth:2,
-        tension:0.25
-      }]
+}
+
+/* --------------------------------------------------------------------------
+   6. H�M LOAD T?T C? D? LI?U
+-------------------------------------------------------------------------- */
+async function loadAllData() {
+    const selectedDate   = document.getElementById("datePicker").value;
+    const selectedSource = document.getElementById("sourcePicker").value;
+
+    let prefix = "";
+
+    if (selectedSource === "raspberry") {
+        prefix = "data_";   // Raspberry Pi
+    } else {
+        prefix = "mqtt_";   // ESP32
     }
-  });
+
+    const temperatureData = downSampleFiveMinutes(
+        filterDataByDate(await fetchJSON(prefix + "temp.json"), selectedDate)
+    );
+
+    const humidityData = downSampleFiveMinutes(
+        filterDataByDate(await fetchJSON(prefix + "hum.json"), selectedDate)
+    );
+
+    const noiseData = downSampleFiveMinutes(
+        filterDataByDate(await fetchJSON(prefix + "noise.json"), selectedDate)
+    );
+
+    const gasData = downSampleFiveMinutes(
+        filterDataByDate(await fetchJSON(prefix + "gas.json"), selectedDate)
+    );
+
+    showStatistics("temperatureStats", temperatureData);
+    showStatistics("humidityStats", humidityData);
+    showStatistics("noiseStats", noiseData);
+    showStatistics("gasStats", gasData);
+
+    drawLineChart("temperatureChart", "Temperature (�C)", temperatureData, "#FF0000");
+    drawLineChart("humidityChart",    "Humidity (%)",    humidityData,    "#0066FF");
+    drawLineChart("noiseChart",       "Noise (dB)",       noiseData,       "#009900");
+    drawLineChart("gasChart",         "Gas (%)",          gasData,         "#FF8800");
+
+    document.getElementById("warningBox").innerText = "No warnings detected.";
 }
 
-/* ====================================================================
-   WARNING ENGINE
-==================================================================== */
-function checkWarnings(entry, date, source){
-  let t = new Date(entry.ts).toLocaleTimeString();
-  let warnings=[];
-
-  if (entry.temp >= 32)
-    warnings.push(`[${t}] HIGH TEMPERATURE: ${entry.temp}�C`);
-
-  if (entry.hum < 40)
-    warnings.push(`[${t}] LOW HUMIDITY: ${entry.hum}%`);
-
-  if (entry.hum > 70)
-    warnings.push(`[${t}] HIGH HUMIDITY: ${entry.hum}%`);
-
-  if (entry.noise > 85)
-    warnings.push(`[${t}] HIGH NOISE: ${entry.noise} dB`);
-
-  if (entry.gas > 10)
-    warnings.push(`[${t}] DANGEROUS GAS: ${entry.gas}%`);
-
-  warnings.forEach(msg => appendWarning(date, source, msg));
-}
-
-/* ====================================================================
-   MAIN LOAD FUNCTION
-==================================================================== */
-async function loadAll(){
-  let date = document.getElementById("datePicker").value;
-  let source = document.getElementById("sourcePicker").value;
-
-  let prefix = (source === "raspberry") ? "data_" : "mqtt_";
-
-  let temp  = filter5min(filterDate(await loadJSON(prefix+"temp.json"), date));
-  let hum   = filter5min(filterDate(await loadJSON(prefix+"hum.json"), date));
-  let noise = filter5min(filterDate(await loadJSON(prefix+"noise.json"), date));
-  let gas   = filter5min(filterDate(await loadJSON(prefix+"gas.json"), date));
-
-  showStats("tempStats", temp);
-  showStats("humStats", hum);
-  showStats("noiseStats", noise);
-  showStats("gasStats", gas);
-
-  drawChart("chartTemp", "Temperature (�C)", temp, "#FF0000");
-  drawChart("chartHum", "Humidity (%)", hum, "#0066FF");
-  drawChart("chartNoise", "Noise (dB)", noise, "#009900");
-  drawChart("chartGas", "Gas (%)", gas, "#FF8800");
-
-  /* b?n ghi cu?i d? ki?m tra c?nh b�o */
-  if (temp.length && hum.length && noise.length && gas.length){
-    let latest = {
-      ts: temp[temp.length-1].ts,
-      temp: temp[temp.length-1].value,
-      hum: hum[hum.length-1].value,
-      noise: noise[noise.length-1].value,
-      gas: gas[gas.length-1].value
-    };
-    checkWarnings(latest, date, source);
-  }
-
-  /* Hi?n th? to�n b? log c?a source + ng�y */
-  showWarningLog(date, source);
-}
-
-loadAll();
+/* Load khi m? trang */
+loadAllData();
 </script>
 
 </body>
